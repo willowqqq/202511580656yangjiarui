@@ -46,7 +46,9 @@ if(RUCBASE_CLANG_FORMAT_EXECUTABLE)
     endif()
 endif()
 
-file(GLOB_RECURSE RUCBASE_CXX_QUALITY_FILES CONFIGURE_DEPENDS
+# 注意：不要加 CONFIGURE_DEPENDS——它会生成 ninja 的 glob 重检查规则，
+# 在含中文路径的 Windows 环境（GBK 代码页）下 FindFirstFileExA 会失败导致构建报错。
+file(GLOB_RECURSE RUCBASE_CXX_QUALITY_FILES
         "${PROJECT_SOURCE_DIR}/src/*.cpp"
         "${PROJECT_SOURCE_DIR}/src/*.h"
         "${PROJECT_SOURCE_DIR}/rucbase_client/*.cpp"
