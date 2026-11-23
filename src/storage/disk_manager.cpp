@@ -20,6 +20,20 @@ namespace fs = std::filesystem;
 
 DiskManager::DiskManager() = default;
 
+DiskManager::~DiskManager() {
+    // 释放所有尚未关闭的文件句柄。Windows 下未关闭的句柄会让文件无法删除，
+    // 测试夹具重建 DiskManager 时依赖这一点；Linux 上同样避免 fd 泄漏。
+    // 注意：WAL 日志文件也登记在 path2fd_ 中，会在下方循环里一并关闭。
+    for (const auto& entry : path2fd_) {
+        if (entry.second >= 0) {
+            close(entry.second);
+        }
+    }
+    path2fd_.clear();
+    fd2path_.clear();
+    log_fd_ = -1;
+}
+
 /**
  * @description: 将数据写入文件的指定磁盘页面中
  * @param {int} fd 磁盘文件的文件句柄

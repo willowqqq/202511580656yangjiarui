@@ -17,7 +17,7 @@ class DiskManager {
 public:
     explicit DiskManager();
 
-    ~DiskManager() = default;
+    ~DiskManager();
 
     void write_page(int fd, page_id_t page_no, const char* offset, int num_bytes);
 

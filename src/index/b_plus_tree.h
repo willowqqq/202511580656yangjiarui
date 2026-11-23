@@ -205,7 +205,7 @@ private:
     BufferPoolManager* buffer_pool_manager_;        ///< 非拥有指针。
     int file_descriptor_;                           ///< 索引文件描述符。
     std::unique_ptr<IndexFileHeader> file_header_;  ///< 独占的内存文件头副本。
-    std::mutex root_latch_;
+    std::recursive_mutex root_latch_;
 
 public:
     BPlusTree(DiskManager* disk_manager, BufferPoolManager* buffer_pool_manager, int file_descriptor);
