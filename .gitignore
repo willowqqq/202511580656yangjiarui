@@ -8,6 +8,7 @@
 # build
 /build/
 /build-win/
+/build-lab2/
 /rucbase_client/build/
 /cmake-build-debug/
 /cmake-build-wsl_profile_debug
