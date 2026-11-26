@@ -16,6 +16,12 @@
 #include "common/defs.h"
 #include "common/errors.h"
 
+// O_BINARY 是 Windows 专属的 open() 标志，POSIX/Linux 无文本/二进制之分、也不定义该宏。
+// 这里在非 Windows 平台将其定义为 0，保证整仓在 Linux 评测机上也能编译通过。
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
 namespace fs = std::filesystem;
 
 DiskManager::DiskManager() = default;
