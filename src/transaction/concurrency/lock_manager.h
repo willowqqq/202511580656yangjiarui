@@ -62,6 +62,24 @@ public:
     bool unlock(Transaction* txn, LockDataId lock_data_id);
 
 private:
+    /** @brief 统一的加锁流程：相容性检查 / 升级 / 记录锁，no-wait 语义。 */
+    bool lock_common(Transaction* txn, LockDataId lock_data_id, LockMode lock_mode);
+
+    /** @brief 锁模式强弱序（X > SIX > S ≈ IX > IS），用于升级判断。 */
+    static int mode_strength(LockMode mode);
+
+    /** @brief 判断已持有的锁是否满足（不弱于）本次申请。 */
+    static bool holds_sufficient(LockMode held, LockMode requested);
+
+    /** @brief 判断申请模式与锁队列当前组模式是否相容。 */
+    static bool is_compatible(LockMode requested, GroupLockMode group);
+
+    /** @brief 授予一个新锁后更新队列的组模式。 */
+    static GroupLockMode combine(GroupLockMode current, LockMode granted);
+
+    /** @brief 释放一个锁后根据剩余请求重新计算组模式。 */
+    static GroupLockMode recompute(const LockRequestQueue& queue);
+
     std::mutex latch_;                                             // 用于锁表的并发
     std::unordered_map<LockDataId, LockRequestQueue> lock_table_;  // 全局锁表
 };

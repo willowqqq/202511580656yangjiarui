@@ -5,6 +5,10 @@
 
 #include <cstring>
 
+#include "common/context.h"
+#include "transaction/concurrency/lock_manager.h"
+#include "transaction/transaction.h"
+
 /**
  * @description: 获取当前表中记录号为rid的记录
  * @param {Rid&} rid 记录号，指定记录的位置
@@ -20,7 +24,14 @@ std::unique_ptr<RmRecord> RmFileHandle::get_record(const Rid& rid, Context* cont
         buffer_pool_manager_->unpin_page(page_handle.page->get_page_id(), false);
         throw RecordNotFoundError(rid.page_no, rid.slot_no);
     }
-    // 3. 把位于指定slot的record拷贝一份返回
+    // 3. Lab4：给该记录加上行级读锁（no-wait，失败则回滚本事务）
+    if (context != nullptr && context->transaction() != nullptr) {
+        Transaction* txn = context->transaction();
+        if (!context->lock_manager()->lock_shared_on_record(txn, rid, fd_)) {
+            throw TransactionAbortException(txn->get_transaction_id(), AbortReason::DEADLOCK_PREVENTION);
+        }
+    }
+    // 4. 把位于指定slot的record拷贝一份返回
     auto record = std::make_unique<RmRecord>(file_hdr_.record_size, page_handle.get_slot(rid.slot_no));
     buffer_pool_manager_->unpin_page(page_handle.page->get_page_id(), false);
     return record;
@@ -53,6 +64,11 @@ Rid RmFileHandle::insert_record(const char* buf, Context* context) {
         file_hdr_.first_free_page_no = page_handle.page_hdr->next_free_page_no;
         page_handle.page_hdr->next_free_page_no = RM_NO_PAGE;
     }
+    // 6. Lab4：记录写操作，用于事务回滚
+    if (context != nullptr && context->transaction() != nullptr) {
+        context->transaction()->append_write_record(
+            WriteRecord(WType::INSERT_TUPLE, disk_manager_->get_file_name(fd_), rid));
+    }
     buffer_pool_manager_->unpin_page(page_handle.page->get_page_id(), true);
     return rid;
 }
@@ -63,7 +79,36 @@ Rid RmFileHandle::insert_record(const char* buf, Context* context) {
  * @param {const char*} buf 要插入的记录数据，只读取 record_size 字节
  */
 void RmFileHandle::insert_record(const Rid& rid, const char* buf) {
-    // 后续恢复/回滚实验使用的扩展接口，不属于 Lab1 评分任务。
+    // Lab4 回滚扩展接口：把旧记录恢复到原来的位置
+    RmPageHandle page_handle = fetch_page_handle(rid.page_no);
+    memcpy(page_handle.get_slot(rid.slot_no), buf, file_hdr_.record_size);
+    Bitmap::set(page_handle.bitmap, rid.slot_no);
+    page_handle.page_hdr->num_records++;
+
+    // 页面因恢复而变满时，需要从空闲页链表中摘除该页
+    if (page_handle.page_hdr->num_records == file_hdr_.num_records_per_page) {
+        const int page_no = page_handle.page->get_page_id().page_no;
+        // 在链表中找到该页的前驱并摘除
+        int prev = RM_NO_PAGE;
+        int cur = file_hdr_.first_free_page_no;
+        while (cur != RM_NO_PAGE && cur != page_no) {
+            RmPageHandle cur_handle = fetch_page_handle(cur);
+            prev = cur;
+            cur = cur_handle.page_hdr->next_free_page_no;
+            buffer_pool_manager_->unpin_page(cur_handle.page->get_page_id(), false);
+        }
+        if (cur == page_no) {
+            if (prev == RM_NO_PAGE) {
+                file_hdr_.first_free_page_no = page_handle.page_hdr->next_free_page_no;
+            } else {
+                RmPageHandle prev_handle = fetch_page_handle(prev);
+                prev_handle.page_hdr->next_free_page_no = page_handle.page_hdr->next_free_page_no;
+                buffer_pool_manager_->unpin_page(prev_handle.page->get_page_id(), true);
+            }
+        }
+        page_handle.page_hdr->next_free_page_no = RM_NO_PAGE;
+    }
+    buffer_pool_manager_->unpin_page(page_handle.page->get_page_id(), true);
 }
 
 /**
@@ -72,12 +117,26 @@ void RmFileHandle::insert_record(const Rid& rid, const char* buf) {
  * @param {Context*} context
  */
 void RmFileHandle::delete_record(const Rid& rid, Context* context) {
-    // 1. 获取指定记录所在的page handle
+    // 1. Lab4：行级写锁 + 写集记录（快照旧值，供回滚恢复）
+    if (context != nullptr && context->transaction() != nullptr) {
+        Transaction* txn = context->transaction();
+        if (!context->lock_manager()->lock_exclusive_on_record(txn, rid, fd_)) {
+            throw TransactionAbortException(txn->get_transaction_id(), AbortReason::DEADLOCK_PREVENTION);
+        }
+        {
+            RmPageHandle snapshot_handle = fetch_page_handle(rid.page_no);
+            RmRecord snapshot(file_hdr_.record_size, snapshot_handle.get_slot(rid.slot_no));
+            buffer_pool_manager_->unpin_page(snapshot_handle.page->get_page_id(), false);
+            txn->append_write_record(
+                WriteRecord(WType::DELETE_TUPLE, disk_manager_->get_file_name(fd_), rid, std::move(snapshot)));
+        }
+    }
+    // 2. 获取指定记录所在的page handle
     RmPageHandle page_handle = fetch_page_handle(rid.page_no);
-    // 2. 将bitmap中对应槽位置0，并减少记录数
+    // 3. 将bitmap中对应槽位置0，并减少记录数
     Bitmap::reset(page_handle.bitmap, rid.slot_no);
     page_handle.page_hdr->num_records--;
-    // 3. 若该页从已满变为未满，将其重新加入空闲页链表
+    // 4. 若该页从已满变为未满，将其重新加入空闲页链表
     if (page_handle.page_hdr->num_records == file_hdr_.num_records_per_page - 1) {
         release_page_handle(page_handle);
     }
@@ -91,9 +150,23 @@ void RmFileHandle::delete_record(const Rid& rid, Context* context) {
  * @param {Context*} context
  */
 void RmFileHandle::update_record(const Rid& rid, const char* buf, Context* context) {
-    // 1. 获取指定记录所在的page handle
+    // 1. Lab4：行级写锁 + 写集记录（快照旧值，供回滚恢复）
+    if (context != nullptr && context->transaction() != nullptr) {
+        Transaction* txn = context->transaction();
+        if (!context->lock_manager()->lock_exclusive_on_record(txn, rid, fd_)) {
+            throw TransactionAbortException(txn->get_transaction_id(), AbortReason::DEADLOCK_PREVENTION);
+        }
+        {
+            RmPageHandle snapshot_handle = fetch_page_handle(rid.page_no);
+            RmRecord snapshot(file_hdr_.record_size, snapshot_handle.get_slot(rid.slot_no));
+            buffer_pool_manager_->unpin_page(snapshot_handle.page->get_page_id(), false);
+            txn->append_write_record(
+                WriteRecord(WType::UPDATE_TUPLE, disk_manager_->get_file_name(fd_), rid, std::move(snapshot)));
+        }
+    }
+    // 2. 获取指定记录所在的page handle
     RmPageHandle page_handle = fetch_page_handle(rid.page_no);
-    // 2. 更新记录
+    // 3. 更新记录
     memcpy(page_handle.get_slot(rid.slot_no), buf, file_hdr_.record_size);
     buffer_pool_manager_->unpin_page(page_handle.page->get_page_id(), true);
 }

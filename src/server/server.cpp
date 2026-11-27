@@ -276,7 +276,7 @@ bool Server::execute_sql(ClientSession* session, const std::string& sql_text) {
     try {
         // Lab 3 保持关闭；Lab 4 按实验文档启用下面这一行。
         // RUCBASE_LAB4_BEGIN_TRANSACTION
-        // prepare_transaction(session, &execution_context);
+        prepare_transaction(session, &execution_context);
 
         // 阶段一：语法解析。解析失败属于客户端输入错误，返回带位置信息的诊断。
         const auto parse_result = parser::Parse(sql_text);
@@ -300,11 +300,11 @@ bool Server::execute_sql(ClientSession* session, const std::string& sql_text) {
 
         // Lab 3 保持关闭；Lab 4 按实验文档启用下面这一段。
         // RUCBASE_LAB4_AUTO_COMMIT
-        // if (execution_context.transaction() != nullptr &&
-        //     execution_context.transaction()->get_txn_mode() == false) {
-        //     transaction_manager_.commit(execution_context.transaction(), execution_context.log_manager());
-        //     finish_session_transaction(session, &execution_context);
-        // }
+        if (execution_context.transaction() != nullptr &&
+            execution_context.transaction()->get_txn_mode() == false) {
+            transaction_manager_.commit(execution_context.transaction(), execution_context.log_manager());
+            finish_session_transaction(session, &execution_context);
+        }
 
         return send_statement_result(session, execution_context.result().view());
     } catch (const TransactionAbortException& exception) {

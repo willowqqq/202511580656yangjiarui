@@ -20,6 +20,8 @@
 #include "record/rm_scan.h"
 #include "storage/buffer_pool_manager.h"
 #include "storage/disk_manager.h"
+#include "transaction/concurrency/lock_manager.h"
+#include "transaction/transaction.h"
 
 namespace {
 
@@ -295,6 +297,14 @@ void SmManager::create_table(const std::string& tab_name, const std::vector<ColD
 void SmManager::drop_table(const std::string& tab_name, Context* context) {
     TabMeta tab = db_.get_table(tab_name);  // 不存在时抛出 TableNotFoundError
 
+    // Lab4：删除整张表需要表级排他锁（no-wait，失败则回滚本事务）
+    if (context != nullptr && context->transaction() != nullptr) {
+        Transaction* txn = context->transaction();
+        if (!context->lock_manager()->lock_exclusive_on_table(txn, fhs_.at(tab_name)->fd())) {
+            throw TransactionAbortException(txn->get_transaction_id(), AbortReason::DEADLOCK_PREVENTION);
+        }
+    }
+
     // 先删除表上的全部索引（drop_index 会同步维护元数据和索引文件）
     const std::vector<IndexMeta> indexes = tab.indexes;
     for (const auto& index : indexes) {
@@ -323,6 +333,14 @@ void SmManager::create_index(const std::string& tab_name,
     }
     if (tab.is_index(col_names)) {
         throw IndexExistsError(tab_name, col_names);
+    }
+
+    // Lab4：修改表结构（索引集合）需要表级意向写锁
+    if (context != nullptr && context->transaction() != nullptr) {
+        Transaction* txn = context->transaction();
+        if (!context->lock_manager()->lock_IX_on_table(txn, fhs_.at(tab_name)->fd())) {
+            throw TransactionAbortException(txn->get_transaction_id(), AbortReason::DEADLOCK_PREVENTION);
+        }
     }
 
     const IndexMeta meta = IndexMeta::make(tab_name, cols, unique);
@@ -379,6 +397,14 @@ void SmManager::drop_index(const std::string& tab_name, const std::vector<ColMet
         col_names.push_back(col.name);
     }
     tab.get_index_meta(col_names);  // 索引不存在时抛出 IndexNotFoundError
+
+    // Lab4：修改表结构（索引集合）需要表级意向写锁
+    if (context != nullptr && context->transaction() != nullptr) {
+        Transaction* txn = context->transaction();
+        if (!context->lock_manager()->lock_IX_on_table(txn, fhs_.at(tab_name)->fd())) {
+            throw TransactionAbortException(txn->get_transaction_id(), AbortReason::DEADLOCK_PREVENTION);
+        }
+    }
 
     // 关闭并删除索引文件
     const std::string index_name = index_manager_->make_index_name(tab_name, cols);
