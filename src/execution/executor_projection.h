@@ -39,11 +39,26 @@ public:
         len_ = curr_offset;
     }
 
-    void begin_tuple() override { throw NotImplementedError("ProjectionExecutor::begin_tuple"); }
+    void begin_tuple() override { prev_->begin_tuple(); }
 
-    void next_tuple() override { throw NotImplementedError("ProjectionExecutor::next_tuple"); }
+    void next_tuple() override { prev_->next_tuple(); }
 
-    std::unique_ptr<RmRecord> next() override { throw NotImplementedError("ProjectionExecutor::next"); }
+    bool is_end() const override { return prev_->is_end(); }
+
+    std::unique_ptr<RmRecord> next() override {
+        auto prev_rec = prev_->next();
+        auto rec = std::make_unique<RmRecord>(static_cast<int>(len_));
+        for (size_t i = 0; i < cols_.size(); ++i) {
+            const ColMeta& source = prev_->cols()[sel_idxs_[i]];
+            const ColMeta& target = cols_[i];
+            memcpy(rec->data + target.offset, prev_rec->data + source.offset, static_cast<size_t>(source.len));
+        }
+        return rec;
+    }
+
+    size_t tuple_len() const override { return len_; }
+
+    const std::vector<ColMeta>& cols() const override { return cols_; }
 
     Rid& rid() override { return abstract_rid_; }
 };

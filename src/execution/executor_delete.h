@@ -9,9 +9,11 @@
 #include <vector>
 
 #include "common/common.h"
+#include "common/context.h"
 #include "common/defs.h"
 #include "common/errors.h"
 #include "executor_abstract.h"
+#include "index/index_manager.h"
 #include "record/rm_defs.h"
 #include "record/rm_file_handle.h"
 #include "system/sm_manager.h"
@@ -45,7 +47,20 @@ public:
      * @brief 按 rids_ 删除记录，并按 (key, rid) 删除它在每个索引中的项。
      * @note 同一 key 在普通索引中可能对应多条记录，只能删掉属于当前记录的那一条。
      */
-    std::unique_ptr<RmRecord> next() override { throw NotImplementedError("DeleteExecutor::next"); }
+    std::unique_ptr<RmRecord> next() override {
+        for (const Rid& rid : rids_) {
+            auto rec = fh_->get_record(rid, context_);
+            // 先删索引项，再删记录，保证两者一致
+            for (const auto& index : tab_.indexes) {
+                const std::string index_name = sm_manager_->get_index_manager()->make_index_name(tab_name_, index.cols);
+                BPlusTree* ih = sm_manager_->indexes_.at(index_name).get();
+                std::vector<char> key = index.make_key(rec->data);
+                ih->delete_entry(key.data(), rid, context_ == nullptr ? nullptr : context_->transaction());
+            }
+            fh_->delete_record(rid, context_);
+        }
+        return nullptr;
+    }
 
     Rid& rid() override { return abstract_rid_; }
 };

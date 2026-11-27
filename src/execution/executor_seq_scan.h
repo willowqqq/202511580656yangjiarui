@@ -13,9 +13,11 @@
 #include "common/config.h"
 #include "common/defs.h"
 #include "common/errors.h"
+#include "cond_eval.h"
 #include "executor_abstract.h"
 #include "record/rm_defs.h"
 #include "record/rm_file_handle.h"
+#include "record/rm_scan.h"
 #include "system/sm_manager.h"
 #include "system/sm_meta.h"
 
@@ -52,27 +54,58 @@ public:
      * @brief 构建表迭代器scan_,并开始迭代扫描,直到扫描到第一个满足谓词条件的元组停止,并赋值给rid_
      *
      */
-    void begin_tuple() override { throw NotImplementedError("SeqScanExecutor::begin_tuple"); }
+    void begin_tuple() override {
+        scan_ = std::make_unique<RmScan>(fh_);
+        advance_to_match();
+    }
 
     /**
      * @brief 从当前scan_指向的记录开始迭代扫描,直到扫描到第一个满足谓词条件的元组停止,并赋值给rid_
      *
      */
-    void next_tuple() override { throw NotImplementedError("SeqScanExecutor::next_tuple"); }
+    void next_tuple() override {
+        scan_->next();
+        advance_to_match();
+    }
 
     /**
      * @brief 返回下一个满足扫描条件的记录
      *
      * @return std::unique_ptr<RmRecord>
      */
-    std::unique_ptr<RmRecord> next() override { throw NotImplementedError("SeqScanExecutor::next"); }
+    std::unique_ptr<RmRecord> next() override { return fh_->get_record(rid_, context_); }
 
-    size_t tuple_len() const override { throw NotImplementedError("Lab 3 sequential scan executor"); }
+    bool is_end() const override { return scan_ == nullptr || scan_->is_end(); }
 
-    const std::vector<ColMeta>& cols() const override { throw NotImplementedError("Lab 3 sequential scan executor"); }
+    size_t tuple_len() const override { return len_; }
 
-    ColMeta get_col_offset(const TabCol& target) override {
-        throw NotImplementedError("Lab 3 sequential scan executor");
+    const std::vector<ColMeta>& cols() const override { return cols_; }
+
+    ColMeta get_col_offset(const TabCol& target) override { return *get_col(cols_, target); }
+
+    /**
+     * @brief 从 scan_ 当前位置起寻找下一条满足全部条件的记录；找到时把位置写入 rid_。
+     */
+    void advance_to_match() {
+        while (scan_ != nullptr && !scan_->is_end()) {
+            if (check_conds(scan_->rid())) {
+                rid_ = scan_->rid();
+                return;
+            }
+            scan_->next();
+        }
+        rid_ = {.page_no = INVALID_PAGE_ID, .slot_no = -1};
+    }
+
+    /** @brief 判断指定位置记录是否满足扫描条件。 */
+    bool check_conds(const Rid& rid) {
+        auto rec = fh_->get_record(rid, context_);
+        for (const auto& cond : conds_) {
+            if (!rucbase::exec::eval_cond(cols_, cond, rec->data)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     Rid& rid() override { return rid_; }
