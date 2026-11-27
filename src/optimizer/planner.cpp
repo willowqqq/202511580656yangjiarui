@@ -42,8 +42,27 @@ bool Planner::choose_index(const std::string& table,
         });
     };
 
+    // 第一个索引列允许等值条件，或同时具有下界（>、>=）与上界（<、<=）的双边范围条件；
+    // 单边范围条件的选择性无法保证，仍走顺序扫描。其余列要求等值条件。
+    const auto has_bound = [&](const ColMeta& column, bool lower_bound) {
+        return std::ranges::any_of(conds, [&](const Condition& condition) {
+            if (!condition.is_rhs_val || condition.lhs_col.tab_name != table ||
+                condition.lhs_col.col_name != column.name) {
+                return false;
+            }
+            return lower_bound ? (condition.op == OP_GT || condition.op == OP_GE)
+                               : (condition.op == OP_LT || condition.op == OP_LE);
+        });
+    };
+    const auto has_bounded_range = [&](const ColMeta& column) {
+        return has_bound(column, true) && has_bound(column, false);
+    };
+
     for (const auto& index : tab.indexes) {
-        const bool matched = std::ranges::all_of(index.cols, has_equality_condition);
+        const bool matched =
+            !index.cols.empty() &&
+            (has_equality_condition(index.cols.front()) || has_bounded_range(index.cols.front())) &&
+            std::ranges::all_of(index.cols.begin() + 1, index.cols.end(), has_equality_condition);
         if (!matched || index.cols.size() <= index_columns.size()) {
             continue;
         }

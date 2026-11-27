@@ -65,9 +65,6 @@ private:
     /** @brief 统一的加锁流程：相容性检查 / 升级 / 记录锁，no-wait 语义。 */
     bool lock_common(Transaction* txn, LockDataId lock_data_id, LockMode lock_mode);
 
-    /** @brief 锁模式强弱序（X > SIX > S ≈ IX > IS），用于升级判断。 */
-    static int mode_strength(LockMode mode);
-
     /** @brief 判断已持有的锁是否满足（不弱于）本次申请。 */
     static bool holds_sufficient(LockMode held, LockMode requested);
 

@@ -7,21 +7,6 @@
 
 #include "transaction/transaction.h"
 
-int LockManager::mode_strength(LockMode mode) {
-    switch (mode) {
-        case LockMode::EXCLUSIVE:
-            return 4;
-        case LockMode::S_IX:
-            return 3;
-        case LockMode::SHARED:
-        case LockMode::INTENTION_EXCLUSIVE:
-            return 2;
-        case LockMode::INTENTION_SHARED:
-            return 1;
-    }
-    return 0;
-}
-
 bool LockManager::holds_sufficient(LockMode held, LockMode requested) {
     // SIX 同时具有 S 与 IX 的能力；X 满足一切
     if (held == LockMode::EXCLUSIVE || held == LockMode::S_IX) {
@@ -104,8 +89,8 @@ bool LockManager::lock_common(Transaction* txn, LockDataId lock_data_id, LockMod
         if (holds_sufficient(it->lock_mode_, lock_mode)) {
             return true;
         }
-        // 升级采用 no-wait：只有本事务是该对象的唯一持锁者时才能升级成功
-        if (queue.request_queue_.size() != 1 || mode_strength(lock_mode) <= mode_strength(it->lock_mode_)) {
+        // 升级/降级采用 no-wait：只有本事务是该对象的唯一持锁者时才能改变锁模式
+        if (queue.request_queue_.size() != 1) {
             return false;
         }
         it->lock_mode_ = lock_mode;

@@ -44,6 +44,13 @@ std::unique_ptr<RmRecord> RmFileHandle::get_record(const Rid& rid, Context* cont
  * @return {Rid} 插入的记录的记录号（位置）
  */
 Rid RmFileHandle::insert_record(const char* buf, Context* context) {
+    // 0. Lab4：插入可能改变表内容（幻读风险），需要表级意向写锁
+    if (context != nullptr && context->transaction() != nullptr) {
+        Transaction* txn = context->transaction();
+        if (!context->lock_manager()->lock_IX_on_table(txn, fd_)) {
+            throw TransactionAbortException(txn->get_transaction_id(), AbortReason::DEADLOCK_PREVENTION);
+        }
+    }
     // 1. 获取当前未满的page handle
     RmPageHandle page_handle = create_page_handle();
     // 2. 在page handle中找到空闲slot位置

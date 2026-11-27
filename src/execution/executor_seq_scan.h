@@ -11,6 +11,7 @@
 
 #include "common/common.h"
 #include "common/config.h"
+#include "common/context.h"
 #include "common/defs.h"
 #include "common/errors.h"
 #include "cond_eval.h"
@@ -20,6 +21,8 @@
 #include "record/rm_scan.h"
 #include "system/sm_manager.h"
 #include "system/sm_meta.h"
+#include "transaction/concurrency/lock_manager.h"
+#include "transaction/transaction.h"
 
 class SeqScanExecutor : public AbstractExecutor {
 private:
@@ -55,6 +58,13 @@ public:
      *
      */
     void begin_tuple() override {
+        // Lab4：表级 S 锁防止幻读（表锁方案）；行级锁由 get_record 负责
+        if (context_ != nullptr && context_->transaction() != nullptr) {
+            Transaction* txn = context_->transaction();
+            if (!context_->lock_manager()->lock_shared_on_table(txn, fh_->fd())) {
+                throw TransactionAbortException(txn->get_transaction_id(), AbortReason::DEADLOCK_PREVENTION);
+            }
+        }
         scan_ = std::make_unique<RmScan>(fh_);
         advance_to_match();
     }

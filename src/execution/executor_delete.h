@@ -18,6 +18,8 @@
 #include "record/rm_file_handle.h"
 #include "system/sm_manager.h"
 #include "system/sm_meta.h"
+#include "transaction/concurrency/lock_manager.h"
+#include "transaction/transaction.h"
 
 class DeleteExecutor : public AbstractExecutor {
 private:
@@ -48,14 +50,20 @@ public:
      * @note 同一 key 在普通索引中可能对应多条记录，只能删掉属于当前记录的那一条。
      */
     std::unique_ptr<RmRecord> next() override {
+        Transaction* txn = context_ == nullptr ? nullptr : context_->transaction();
         for (const Rid& rid : rids_) {
+            // 先申请行级写锁：失败则本行尚未发生任何修改（含索引项），可以直接回滚事务
+            if (txn != nullptr &&
+                !context_->lock_manager()->lock_exclusive_on_record(txn, rid, fh_->fd())) {
+                throw TransactionAbortException(txn->get_transaction_id(), AbortReason::DEADLOCK_PREVENTION);
+            }
             auto rec = fh_->get_record(rid, context_);
             // 先删索引项，再删记录，保证两者一致
             for (const auto& index : tab_.indexes) {
                 const std::string index_name = sm_manager_->get_index_manager()->make_index_name(tab_name_, index.cols);
                 BPlusTree* ih = sm_manager_->indexes_.at(index_name).get();
                 std::vector<char> key = index.make_key(rec->data);
-                ih->delete_entry(key.data(), rid, context_ == nullptr ? nullptr : context_->transaction());
+                ih->delete_entry(key.data(), rid, txn);
             }
             fh_->delete_record(rid, context_);
         }

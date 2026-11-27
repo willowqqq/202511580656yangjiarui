@@ -18,6 +18,8 @@
 #include "record/rm_file_handle.h"
 #include "system/sm_manager.h"
 #include "system/sm_meta.h"
+#include "transaction/concurrency/lock_manager.h"
+#include "transaction/transaction.h"
 
 class UpdateExecutor : public AbstractExecutor {
 private:
@@ -54,6 +56,11 @@ public:
     std::unique_ptr<RmRecord> next() override {
         Transaction* txn = context_ == nullptr ? nullptr : context_->transaction();
         for (const Rid& rid : rids_) {
+            // 先申请行级写锁：失败则本行尚未发生任何修改（含索引项），可以直接回滚事务
+            if (txn != nullptr &&
+                !context_->lock_manager()->lock_exclusive_on_record(txn, rid, fh_->fd())) {
+                throw TransactionAbortException(txn->get_transaction_id(), AbortReason::DEADLOCK_PREVENTION);
+            }
             auto old_rec = fh_->get_record(rid, context_);
 
             // 构造新记录：先整体拷贝旧记录，再按 set_clauses_ 覆盖对应字段
